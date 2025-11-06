@@ -962,9 +962,7 @@ class CLI:
 
         # Validate export-only options
         if config.no_neo4j_write and not config.export_file:
-            raise ValueError(
-                "--no-neo4j-write requires --export-file to be set."
-            )
+            raise ValueError("--no-neo4j-write requires --export-file to be set.")
 
         # AWS config
         if config.aws_requested_syncs:

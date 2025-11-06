@@ -47,10 +47,10 @@ import cartography.intel.spacelift
 import cartography.intel.tailscale
 import cartography.intel.trivy
 from cartography.config import Config
+from cartography.sinks import file_export as file_export_sink
 from cartography.stats import set_stats_client
 from cartography.util import STATUS_FAILURE
 from cartography.util import STATUS_SUCCESS
-from cartography.sinks import file_export as file_export_sink
 
 logger = logging.getLogger(__name__)
 

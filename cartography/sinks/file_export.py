@@ -4,8 +4,10 @@ import io
 import json
 import os
 import threading
-from dataclasses import asdict
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
 
 # Minimal, opt-in export sink for append-only NDJSON.gz streams.
 
@@ -14,8 +16,8 @@ class _ThreadSafeGzipWriter:
     def __init__(self, path: str) -> None:
         # Ensure parent directory exists
         os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
-        # Open gzip file in text mode
-        self._fh: gzip.GzipFile = gzip.open(path, mode="wt", encoding="utf-8")  # type: ignore
+        # Open gzip file in text mode; returns a TextIO wrapper
+        self._fh: io.TextIOWrapper = gzip.open(path, mode="wt", encoding="utf-8")
         self._lock = threading.Lock()
         self._closed = False
 
@@ -26,6 +28,8 @@ class _ThreadSafeGzipWriter:
             self._fh.write(line)
             if not line.endswith("\n"):
                 self._fh.write("\n")
+            # Ensure data is visible to readers even before close()
+            self._fh.flush()
 
     def close(self) -> None:
         with self._lock:
@@ -54,7 +58,9 @@ class FileExportSink:
 
     def write_record(self, record: Dict[str, Any]) -> None:
         # Keep JSON output stable and minimal
-        self._writer.write_line(json.dumps(record, separators=(",", ":"), sort_keys=False))
+        self._writer.write_line(
+            json.dumps(record, separators=(",", ":"), sort_keys=False)
+        )
 
     # Convenience helpers
     def write_vertex(
@@ -153,4 +159,3 @@ def set_no_neo4j_write(flag: bool) -> None:
 
 def get_no_neo4j_write() -> bool:
     return _no_neo4j_write
-

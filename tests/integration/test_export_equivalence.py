@@ -2,11 +2,11 @@ import gzip
 import json
 import os
 import tempfile
+from typing import Any, Callable, TypeVar
 
 import pytest
 
 from cartography.client.core.tx import load
-from cartography.sinks import file_export as file_export_sink
 
 # Models used for the tests
 from cartography.models.lastpass.tenant import LastpassTenantSchema
@@ -14,9 +14,7 @@ from cartography.models.lastpass.user import LastpassUserSchema
 from cartography.models.openai.organization import OpenAIOrganizationSchema
 from cartography.models.openai.project import OpenAIProjectSchema
 from cartography.models.openai.user import OpenAIUserSchema
-from cartography.models.scaleway.instance.flexibleip import (
-    ScalewayFlexibleIpSchema,
-)
+from cartography.models.scaleway.instance.flexibleip import ScalewayFlexibleIpSchema
 from cartography.models.scaleway.organization import ScalewayOrganizationSchema
 from cartography.models.scaleway.project import ScalewayProjectSchema
 from cartography.models.sentinelone.account import S1AccountSchema
@@ -27,10 +25,11 @@ from cartography.models.snipeit.user import SnipeitUserSchema
 from cartography.models.tailscale.device import TailscaleDeviceSchema
 from cartography.models.tailscale.tailnet import TailscaleTailnetSchema
 from cartography.models.tailscale.user import TailscaleUserSchema
+from cartography.sinks import file_export as file_export_sink
 
 
 def _read_ndjson_gz(path: str):
-    with gzip.open(path, mode="rt", encoding="utf-8") as fh:  # type: ignore
+    with gzip.open(path, mode="rt", encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -40,7 +39,13 @@ def _read_ndjson_gz(path: str):
 
 def _find_vertex(records, label, uid):
     return next(
-        (r for r in records if r.get("record_type") == "vertex" and uid == r.get("uid") and label in r.get("labels", [])),
+        (
+            r
+            for r in records
+            if r.get("record_type") == "vertex"
+            and uid == r.get("uid")
+            and label in r.get("labels", [])
+        ),
         None,
     )
 
@@ -59,17 +64,23 @@ def _edge_exists(records, rel_type, from_uid=None, to_uid=None):
     return False
 
 
-def _with_export(fn):
-    def wrapper(*args, **kwargs):
+R = TypeVar("R")
+
+
+def _with_export(fn: Callable[[str, Any], R]) -> Callable[[Any], R]:
+    def wrapper(neo4j_session: Any) -> R:
         with tempfile.TemporaryDirectory() as td:
             out_path = os.path.join(td, "graph.ndjson.gz")
             file_export_sink.enable(out_path)
             try:
-                file_export_sink.set_no_neo4j_write(False)  # Tee: write to both export and Neo4j
-                fn_out = fn(out_path, *args, **kwargs)
+                file_export_sink.set_no_neo4j_write(
+                    False
+                )  # Tee: write to both export and Neo4j
+                fn_out: R = fn(out_path, neo4j_session)
             finally:
                 file_export_sink.disable()
         return fn_out
+
     return wrapper
 
 
@@ -80,7 +91,12 @@ def test_lastpass_user_export_equivalence(out_path: str, neo4j_session):
     user_id = "lp-user-1"
 
     # Preload tenant
-    load(neo4j_session, LastpassTenantSchema(), [{"id": tenant_id}], lastupdated=update_tag)
+    load(
+        neo4j_session,
+        LastpassTenantSchema(),
+        [{"id": tenant_id}],
+        lastupdated=update_tag,
+    )
     # Load user
     data = [
         {
@@ -98,7 +114,9 @@ def test_lastpass_user_export_equivalence(out_path: str, neo4j_session):
     )
 
     # Neo4j assertions
-    res = neo4j_session.run("MATCH (n:LastpassUser{id:$id}) RETURN count(n) AS c", id=user_id).single()
+    res = neo4j_session.run(
+        "MATCH (n:LastpassUser{id:$id}) RETURN count(n) AS c", id=user_id
+    ).single()
     assert res["c"] == 1
     rel = neo4j_session.run(
         "MATCH (u:LastpassUser{id:$id})-[:RESOURCE]->(t:LastpassTenant{id:$tid}) RETURN count(*) AS c",
@@ -107,12 +125,14 @@ def test_lastpass_user_export_equivalence(out_path: str, neo4j_session):
     ).single()
     assert rel["c"] == 1
 
+    # Close export sink to finalize gzip before reading
+    file_export_sink.disable()
     # Export assertions
     records = list(_read_ndjson_gz(out_path))
     assert _find_vertex(records, "LastpassUser", user_id)
-    assert _edge_exists(records, "RESOURCE", from_uid=user_id, to_uid=tenant_id) or _edge_exists(
-        records, "RESOURCE", from_uid=tenant_id, to_uid=user_id
-    )
+    assert _edge_exists(
+        records, "RESOURCE", from_uid=user_id, to_uid=tenant_id
+    ) or _edge_exists(records, "RESOURCE", from_uid=tenant_id, to_uid=user_id)
 
 
 @_with_export
@@ -123,11 +143,23 @@ def test_snipeit_asset_export_equivalence(out_path: str, neo4j_session):
     asset_id = "asset-1"
 
     # Preload tenant and user
-    load(neo4j_session, SnipeitTenantSchema(), [{"id": tenant_id}], lastupdated=update_tag)
+    load(
+        neo4j_session,
+        SnipeitTenantSchema(),
+        [{"id": tenant_id}],
+        lastupdated=update_tag,
+    )
     load(
         neo4j_session,
         SnipeitUserSchema(),
-        [{"id": "su1", "email": user_email, "company_id.name": "Acme", "username": "owner"}],
+        [
+            {
+                "id": "su1",
+                "email": user_email,
+                "company_id.name": "Acme",
+                "username": "owner",
+            }
+        ],
         lastupdated=update_tag,
         TENANT_ID=tenant_id,
     )
@@ -153,7 +185,9 @@ def test_snipeit_asset_export_equivalence(out_path: str, neo4j_session):
     )
 
     # Neo4j assertions
-    res = neo4j_session.run("MATCH (n:SnipeitAsset{id:$id}) RETURN count(n) AS c", id=asset_id).single()
+    res = neo4j_session.run(
+        "MATCH (n:SnipeitAsset{id:$id}) RETURN count(n) AS c", id=asset_id
+    ).single()
     assert res["c"] == 1
     rel = neo4j_session.run(
         "MATCH (:SnipeitTenant{id:$tid})-[:HAS_ASSET]->(:SnipeitAsset{id:$aid}) RETURN count(*) AS c",
@@ -162,6 +196,8 @@ def test_snipeit_asset_export_equivalence(out_path: str, neo4j_session):
     ).single()
     assert rel["c"] == 1
 
+    # Close export sink to finalize gzip before reading
+    file_export_sink.disable()
     # Export assertions
     records = list(_read_ndjson_gz(out_path))
     assert _find_vertex(records, "SnipeitAsset", asset_id)
@@ -176,7 +212,13 @@ def test_tailscale_device_export_equivalence(out_path: str, neo4j_session):
     device_id = "node-1"
 
     # Preload tailnet and user
-    load(neo4j_session, TailscaleTailnetSchema(), [{}], lastupdated=update_tag, org=tailnet)
+    load(
+        neo4j_session,
+        TailscaleTailnetSchema(),
+        [{}],
+        lastupdated=update_tag,
+        org=tailnet,
+    )
     load(
         neo4j_session,
         TailscaleUserSchema(),
@@ -199,7 +241,9 @@ def test_tailscale_device_export_equivalence(out_path: str, neo4j_session):
         org=tailnet,
     )
 
-    res = neo4j_session.run("MATCH (n:TailscaleDevice{id:$id}) RETURN count(n) AS c", id=device_id).single()
+    res = neo4j_session.run(
+        "MATCH (n:TailscaleDevice{id:$id}) RETURN count(n) AS c", id=device_id
+    ).single()
     assert res["c"] == 1
     rel = neo4j_session.run(
         "MATCH (:TailscaleTailnet{id:$tid})-[:RESOURCE]->(:TailscaleDevice{id:$did}) RETURN count(*) AS c",
@@ -208,6 +252,7 @@ def test_tailscale_device_export_equivalence(out_path: str, neo4j_session):
     ).single()
     assert rel["c"] == 1
 
+    file_export_sink.disable()
     records = list(_read_ndjson_gz(out_path))
     assert _find_vertex(records, "TailscaleDevice", device_id)
     assert _edge_exists(records, "RESOURCE")
@@ -221,11 +266,20 @@ def test_openai_project_export_equivalence(out_path: str, neo4j_session):
     project = "proj-1"
 
     # Preload organization and user
-    load(neo4j_session, OpenAIOrganizationSchema(), [{"id": org}], lastupdated=update_tag)
+    load(
+        neo4j_session, OpenAIOrganizationSchema(), [{"id": org}], lastupdated=update_tag
+    )
     load(
         neo4j_session,
         OpenAIUserSchema(),
-        [{"object": "organization.member", "id": user, "name": "User", "email": "user@openai.test"}],
+        [
+            {
+                "object": "organization.member",
+                "id": user,
+                "name": "User",
+                "email": "user@openai.test",
+            }
+        ],
         lastupdated=update_tag,
         ORG_ID=org,
     )
@@ -248,7 +302,9 @@ def test_openai_project_export_equivalence(out_path: str, neo4j_session):
         ORG_ID=org,
     )
 
-    res = neo4j_session.run("MATCH (n:OpenAIProject{id:$id}) RETURN count(n) AS c", id=project).single()
+    res = neo4j_session.run(
+        "MATCH (n:OpenAIProject{id:$id}) RETURN count(n) AS c", id=project
+    ).single()
     assert res["c"] == 1
     rel = neo4j_session.run(
         "MATCH (:OpenAIOrganization{id:$org})-[:RESOURCE]->(:OpenAIProject{id:$pid}) RETURN count(*) AS c",
@@ -257,12 +313,16 @@ def test_openai_project_export_equivalence(out_path: str, neo4j_session):
     ).single()
     assert rel["c"] == 1
 
+    file_export_sink.disable()
     records = list(_read_ndjson_gz(out_path))
     assert _find_vertex(records, "OpenAIProject", project)
     assert _edge_exists(records, "RESOURCE")
 
 
-@pytest.mark.xfail(reason="Investigating CI flake; model export coverage retained without gating CI", strict=False)
+@pytest.mark.xfail(  # type: ignore[misc]
+    reason="Investigating CI flake; model export coverage retained without gating CI",
+    strict=False,
+)
 @_with_export
 def test_sentinelone_agent_export_equivalence(out_path: str, neo4j_session):
     update_tag = 1700000500
@@ -270,7 +330,12 @@ def test_sentinelone_agent_export_equivalence(out_path: str, neo4j_session):
     agent_id = "s1-agent-1"
 
     # Preload account
-    load(neo4j_session, S1AccountSchema(), [{"id": account_id, "name": "Acct"}], lastupdated=update_tag)
+    load(
+        neo4j_session,
+        S1AccountSchema(),
+        [{"id": account_id, "name": "Acct"}],
+        lastupdated=update_tag,
+    )
     # Load agent under account
     load(
         neo4j_session,
@@ -280,7 +345,9 @@ def test_sentinelone_agent_export_equivalence(out_path: str, neo4j_session):
         S1_ACCOUNT_ID=account_id,
     )
 
-    res = neo4j_session.run("MATCH (n:S1Agent{id:$id}) RETURN count(n) AS c", id=agent_id).single()
+    res = neo4j_session.run(
+        "MATCH (n:S1Agent{id:$id}) RETURN count(n) AS c", id=agent_id
+    ).single()
     assert res["c"] == 1
     rel = neo4j_session.run(
         "MATCH (:S1Account{id:$aid})-[:RESOURCE]->(:S1Agent{id:$gid}) RETURN count(*) AS c",
@@ -294,7 +361,10 @@ def test_sentinelone_agent_export_equivalence(out_path: str, neo4j_session):
     assert _edge_exists(records, "RESOURCE")
 
 
-@pytest.mark.xfail(reason="Investigating CI flake; model export coverage retained without gating CI", strict=False)
+@pytest.mark.xfail(  # type: ignore[misc]
+    reason="Investigating CI flake; model export coverage retained without gating CI",
+    strict=False,
+)
 @_with_export
 def test_scaleway_flexibleip_export_equivalence(out_path: str, neo4j_session):
     update_tag = 1700000600
@@ -303,7 +373,12 @@ def test_scaleway_flexibleip_export_equivalence(out_path: str, neo4j_session):
     fip_id = "fip-1"
 
     # Preload org and project
-    load(neo4j_session, ScalewayOrganizationSchema(), [{"id": org_id}], lastupdated=update_tag)
+    load(
+        neo4j_session,
+        ScalewayOrganizationSchema(),
+        [{"id": org_id}],
+        lastupdated=update_tag,
+    )
     load(
         neo4j_session,
         ScalewayProjectSchema(),

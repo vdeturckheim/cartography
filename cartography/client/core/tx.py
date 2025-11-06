@@ -1,11 +1,12 @@
 import logging
+from dataclasses import asdict
 from typing import Any
 from typing import Dict
+from typing import Iterable
 from typing import List
 from typing import Optional
 from typing import Tuple
 from typing import Union
-from typing import Iterable
 
 import backoff
 import neo4j
@@ -14,15 +15,14 @@ from cartography.graph.querybuilder import build_create_index_queries
 from cartography.graph.querybuilder import build_create_index_queries_for_matchlink
 from cartography.graph.querybuilder import build_ingestion_query
 from cartography.graph.querybuilder import build_matchlink_query
-from cartography.models.core.nodes import CartographyNodeSchema
-from cartography.models.core.relationships import CartographyRelSchema
 from cartography.models.core.common import PropertyRef
+from cartography.models.core.nodes import CartographyNodeSchema
 from cartography.models.core.nodes import ExtraNodeLabels
+from cartography.models.core.relationships import CartographyRelSchema
 from cartography.models.core.relationships import LinkDirection
+from cartography.sinks import file_export as file_export_sink
 from cartography.util import backoff_handler
 from cartography.util import batch
-from cartography.sinks import file_export as file_export_sink
-from dataclasses import asdict
 
 logger = logging.getLogger(__name__)
 
@@ -410,7 +410,9 @@ def load_matchlinks(
     )
 
 
-def _resolve_prop_value(prop: PropertyRef, item: Dict[str, Any], kwargs: Dict[str, Any]) -> Any:
+def _resolve_prop_value(
+    prop: PropertyRef, item: Dict[str, Any], kwargs: Dict[str, Any]
+) -> Any:
     return kwargs.get(prop.name) if prop.set_in_kwargs else item.get(prop.name)
 
 
@@ -434,7 +436,9 @@ def _export_node_batch(
 
     # Prepare relationship helpers
     sub_rel = node_schema.sub_resource_relationship
-    other_rels = node_schema.other_relationships.rels if node_schema.other_relationships else []
+    other_rels = (
+        node_schema.other_relationships.rels if node_schema.other_relationships else []
+    )
 
     for item in dict_list:
         # Node basics
@@ -446,9 +450,11 @@ def _export_node_batch(
         except Exception:
             node_props = {}
 
-        node_id_ref: PropertyRef = node_schema.properties.id  # type: ignore[attr-defined]
+        node_id_ref: PropertyRef = node_schema.properties.id
         node_uid = _resolve_prop_value(node_id_ref, item, kwargs)
-        update_tag = _resolve_prop_value(node_schema.properties.lastupdated, item, kwargs)  # type: ignore[attr-defined]
+        update_tag = _resolve_prop_value(
+            node_schema.properties.lastupdated, item, kwargs
+        )
 
         # Build exported props excluding id/lastupdated
         props: Dict[str, Any] = {}
@@ -462,7 +468,7 @@ def _export_node_batch(
         sub_id: Optional[Any] = None
         if sub_rel is not None:
             sub_label = sub_rel.target_node_label
-            matcher_dict: Dict[str, PropertyRef] = asdict(sub_rel.target_node_matcher)  # type: ignore
+            matcher_dict: Dict[str, PropertyRef] = asdict(sub_rel.target_node_matcher)
             # Expect single-key matcher; use 'id' when present
             if len(matcher_dict) == 1 and "id" in matcher_dict:
                 sub_id = _resolve_prop_value(matcher_dict["id"], item, kwargs)
@@ -478,7 +484,12 @@ def _export_node_batch(
         )
 
         # Export edges for sub-resource
-        if sub_rel is not None and sub_label is not None and sub_id is not None and node_uid is not None:
+        if (
+            sub_rel is not None
+            and sub_label is not None
+            and sub_id is not None
+            and node_uid is not None
+        ):
             if sub_rel.direction == LinkDirection.INWARD:
                 sink.write_edge(
                     from_uid=sub_id,
@@ -518,7 +529,6 @@ def _export_node_batch(
                     # Prefer direct uid linkage when key == 'id'; otherwise export a matcher fallback
                     from_uid = node_uid
                     to_uid = v if key == "id" else None
-                    from_match = None
                     to_match = None
                     if key != "id":
                         to_match = {key: v}
@@ -542,7 +552,8 @@ def _export_node_batch(
             else:
                 # Composite matcher; export as best-effort matcher description
                 match_payload: Dict[str, Any] = {
-                    k: _resolve_prop_value(p, item, kwargs) for k, p in matcher_dict.items()
+                    k: _resolve_prop_value(p, item, kwargs)
+                    for k, p in matcher_dict.items()
                 }
                 if rel.direction == LinkDirection.INWARD:
                     sink.write_edge(
@@ -569,7 +580,9 @@ def _export_matchlinks_batch(
     if not sink:
         return
 
-    source_matcher: Dict[str, PropertyRef] = asdict(rel_schema.source_node_matcher) if rel_schema.source_node_matcher else {}
+    source_matcher: Dict[str, PropertyRef] = (
+        asdict(rel_schema.source_node_matcher) if rel_schema.source_node_matcher else {}
+    )
     target_matcher: Dict[str, PropertyRef] = asdict(rel_schema.target_node_matcher)
 
     sub_label = kwargs.get("_sub_resource_label")
@@ -587,8 +600,16 @@ def _export_matchlinks_batch(
         tgt_vals = _resolve_matcher(target_matcher)
 
         # Prefer uid linkage when matching on single 'id'
-        from_uid = src_vals.get("id") if len(source_matcher) == 1 and "id" in source_matcher else None
-        to_uid = tgt_vals.get("id") if len(target_matcher) == 1 and "id" in target_matcher else None
+        from_uid = (
+            src_vals.get("id")
+            if len(source_matcher) == 1 and "id" in source_matcher
+            else None
+        )
+        to_uid = (
+            tgt_vals.get("id")
+            if len(target_matcher) == 1 and "id" in target_matcher
+            else None
+        )
 
         if rel_schema.direction == LinkDirection.INWARD:
             sink.write_edge(
