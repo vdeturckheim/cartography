@@ -11,8 +11,10 @@ from oci.exceptions import ConfigFileNotFound
 from oci.exceptions import InvalidConfig
 from oci.exceptions import ProfileNotFound
 
-from cartography.client.core.tx import run_write_query
+from cartography.client.core.tx import load
 from cartography.util import run_cleanup_job
+from cartography.models.oci.tenancy import OCITenancySchema
+from cartography.graph.job import GraphJob
 
 logger = logging.getLogger(__name__)
 
@@ -95,26 +97,20 @@ def load_oci_accounts(
     oci_update_tag: int,
     common_job_parameters: Dict[str, Any],
 ) -> None:
-    query = """
-    MERGE (aa:OCITenancy{ocid: $TENANCY_ID})
-    ON CREATE SET aa.firstseen = timestamp()
-    SET aa.lastupdated = $oci_update_tag, aa.name = $ACCOUNT_NAME
-    """
-    for name in oci_accounts:
-        run_write_query(
-            neo4j_session,
-            query,
-            TENANCY_ID=oci_accounts[name]["tenancy"],
-            ACCOUNT_NAME=name,
-            oci_update_tag=oci_update_tag,
-        )
+    records = [
+        {"id": creds["tenancy"], "ocid": creds["tenancy"], "name": name}
+        for name, creds in oci_accounts.items()
+    ]
+    if not records:
+        return
+    load(neo4j_session, OCITenancySchema(), records, lastupdated=oci_update_tag)
 
 
 def cleanup(
     neo4j_session: neo4j.Session,
     common_job_parameters: Dict[str, Any],
 ) -> None:
-    run_cleanup_job("oci_tenancy_cleanup.json", neo4j_session, common_job_parameters)
+    GraphJob.from_node_schema(OCITenancySchema(), common_job_parameters).run(neo4j_session)
 
 
 def sync(
