@@ -23,6 +23,11 @@ from cartography.models.tailscale.device import TailscaleDeviceSchema
 from cartography.models.openai.organization import OpenAIOrganizationSchema
 from cartography.models.openai.user import OpenAIUserSchema
 from cartography.models.openai.project import OpenAIProjectSchema
+from cartography.models.sentinelone.account import S1AccountSchema
+from cartography.models.sentinelone.agent import S1AgentSchema
+from cartography.models.scaleway.organization import ScalewayOrganizationSchema
+from cartography.models.scaleway.project import ScalewayProjectSchema
+from cartography.models.scaleway.instance.flexibleip import ScalewayFlexibleIpSchema
 
 
 def _read_ndjson_gz(path: str):
@@ -257,3 +262,75 @@ def test_openai_project_export_equivalence(out_path: str, neo4j_session: neo4j.S
     assert _find_vertex(records, "OpenAIProject", project)
     assert _edge_exists(records, "RESOURCE")
 
+
+@_with_export
+def test_sentinelone_agent_export_equivalence(out_path: str, neo4j_session: neo4j.Session):
+    update_tag = 1700000500
+    account_id = "s1-acc-1"
+    agent_id = "s1-agent-1"
+
+    # Preload account
+    load(neo4j_session, S1AccountSchema(), [{"id": account_id, "name": "Acct"}], lastupdated=update_tag)
+    # Load agent under account
+    load(
+        neo4j_session,
+        S1AgentSchema(),
+        [{"id": agent_id, "uuid": "u-1", "computer_name": "comp"}],
+        lastupdated=update_tag,
+        S1_ACCOUNT_ID=account_id,
+    )
+
+    res = neo4j_session.run("MATCH (n:S1Agent{id:$id}) RETURN count(n) AS c", id=agent_id).single()
+    assert res["c"] == 1
+    rel = neo4j_session.run(
+        "MATCH (:S1Account{id:$aid})-[:RESOURCE]->(:S1Agent{id:$gid}) RETURN count(*) AS c",
+        aid=account_id,
+        gid=agent_id,
+    ).single()
+    assert rel["c"] == 1
+
+    records = list(_read_ndjson_gz(out_path))
+    assert _find_vertex(records, "S1Agent", agent_id)
+    assert _edge_exists(records, "RESOURCE")
+
+
+@_with_export
+def test_scaleway_flexibleip_export_equivalence(out_path: str, neo4j_session: neo4j.Session):
+    update_tag = 1700000600
+    org_id = "scw-org-1"
+    project_id = "scw-proj-1"
+    fip_id = "fip-1"
+
+    # Preload org and project
+    load(neo4j_session, ScalewayOrganizationSchema(), [{"id": org_id}], lastupdated=update_tag)
+    load(
+        neo4j_session,
+        ScalewayProjectSchema(),
+        [{"id": project_id, "name": "Proj"}],
+        lastupdated=update_tag,
+        ORG_ID=org_id,
+    )
+    # Load Flexible IP under project
+    load(
+        neo4j_session,
+        ScalewayFlexibleIpSchema(),
+        [{"id": fip_id, "address": "203.0.113.10"}],
+        lastupdated=update_tag,
+        PROJECT_ID=project_id,
+    )
+
+    res = neo4j_session.run(
+        "MATCH (n:ScalewayFlexibleIp{id:$id}) RETURN count(n) AS c",
+        id=fip_id,
+    ).single()
+    assert res["c"] == 1
+    rel = neo4j_session.run(
+        "MATCH (:ScalewayProject{id:$pid})-[:RESOURCE]->(:ScalewayFlexibleIp{id:$fid}) RETURN count(*) AS c",
+        pid=project_id,
+        fid=fip_id,
+    ).single()
+    assert rel["c"] == 1
+
+    records = list(_read_ndjson_gz(out_path))
+    assert _find_vertex(records, "ScalewayFlexibleIp", fip_id)
+    assert _edge_exists(records, "RESOURCE")
