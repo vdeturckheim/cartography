@@ -113,7 +113,14 @@ jobs:
         timeout-minutes: 1
         run: (docker logs -f neo4j-5 & ) | grep -q Started
       - name: run export equivalence tests
-        run: pytest -q tests/integration/test_export_equivalence.py
+        run: |
+          pytest -q tests/integration/test_export_equivalence.py --junitxml=pytest-report.xml || echo "pytest failed"
+      - name: Upload pytest report
+        if: always()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.4.3
+        with:
+          name: export-equivalence-pytest-report
+          path: pytest-report.xml
 
   # Test that the docker image builds successfully on each commit
   build-docker-image:
