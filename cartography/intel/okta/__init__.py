@@ -16,7 +16,21 @@ from cartography.intel.okta import users
 from cartography.intel.okta.sync_state import OktaSyncState
 from cartography.stats import get_stats_client
 from cartography.util import merge_module_sync_metadata
-from cartography.util import run_cleanup_job
+from cartography.graph.job import GraphJob
+from cartography.models.okta.organization import OktaOrganizationSchema
+from cartography.models.okta.user import OktaUserSchema
+from cartography.models.okta.group import OktaGroupSchema
+from cartography.models.okta.application import OktaApplicationSchema, ReplyUriSchema
+from cartography.models.okta.role import OktaAdministrationRoleSchema
+from cartography.models.okta.factor import OktaUserFactorSchema
+from cartography.models.okta.trustedorigin import OktaTrustedOriginSchema
+from cartography.models.okta.common import (
+    OktaUserMemberOfGroupMatchLink,
+    OktaUserApplicationMatchLink,
+    OktaGroupApplicationMatchLink,
+    OktaApplicationToReplyUriMatchLink,
+    OktaGroupAllowedByAWSRoleMatchLink,
+)
 from cartography.util import timeit
 
 logger = logging.getLogger(__name__)
@@ -24,25 +38,28 @@ stat_handler = get_stats_client(__name__)
 
 
 @timeit
-def _cleanup_okta_organizations(
+def _cleanup_okta(
     neo4j_session: neo4j.Session,
+    org_id: str,
+    update_tag: int,
     common_job_parameters: Dict,
 ) -> None:
-    """
-    Remove stale Okta organization
-    :param neo4j_session: The Neo4j session
-    :param common_job_parameters: Parameters to carry to the cleanup job
-    :return: Nothing
-    """
-    run_cleanup_job("okta_import_cleanup.json", neo4j_session, common_job_parameters)
-    cleanup_okta_groups(neo4j_session, common_job_parameters)
+    # Node cleanups
+    GraphJob.from_node_schema(OktaOrganizationSchema(), common_job_parameters).run(neo4j_session)
+    GraphJob.from_node_schema(OktaUserSchema(), common_job_parameters).run(neo4j_session)
+    GraphJob.from_node_schema(OktaGroupSchema(), common_job_parameters).run(neo4j_session)
+    GraphJob.from_node_schema(OktaApplicationSchema(), common_job_parameters).run(neo4j_session)
+    GraphJob.from_node_schema(OktaAdministrationRoleSchema(), common_job_parameters).run(neo4j_session)
+    GraphJob.from_node_schema(OktaUserFactorSchema(), common_job_parameters).run(neo4j_session)
+    GraphJob.from_node_schema(OktaTrustedOriginSchema(), common_job_parameters).run(neo4j_session)
+    GraphJob.from_node_schema(ReplyUriSchema(), common_job_parameters).run(neo4j_session)
 
-
-def cleanup_okta_groups(
-    neo4j_session: neo4j.Session,
-    common_job_parameters: Dict,
-) -> None:
-    run_cleanup_job("okta_groups_cleanup.json", neo4j_session, common_job_parameters)
+    # Matchlink relationship cleanups (scoped by OktaOrganization)
+    GraphJob.from_matchlink(OktaUserMemberOfGroupMatchLink(), "OktaOrganization", org_id, update_tag).run(neo4j_session)
+    GraphJob.from_matchlink(OktaUserApplicationMatchLink(), "OktaOrganization", org_id, update_tag).run(neo4j_session)
+    GraphJob.from_matchlink(OktaGroupApplicationMatchLink(), "OktaOrganization", org_id, update_tag).run(neo4j_session)
+    GraphJob.from_matchlink(OktaApplicationToReplyUriMatchLink(), "OktaOrganization", org_id, update_tag).run(neo4j_session)
+    GraphJob.from_matchlink(OktaGroupAllowedByAWSRoleMatchLink(), "OktaOrganization", org_id, update_tag).run(neo4j_session)
 
 
 @timeit
@@ -134,7 +151,7 @@ def start_okta_ingestion(neo4j_session: neo4j.Session, config: Config) -> None:
                 "Unable to sync admin roles - api token needs admin rights to pull admin roles data",
             )
 
-    _cleanup_okta_organizations(neo4j_session, common_job_parameters)
+    _cleanup_okta(neo4j_session, config.okta_org_id, config.update_tag, common_job_parameters)
 
     merge_module_sync_metadata(
         neo4j_session,

@@ -3,8 +3,9 @@ import logging
 
 import neo4j
 
-from cartography.client.core.tx import run_write_query
+from cartography.client.core.tx import load
 from cartography.util import timeit
+from cartography.models.okta.organization import OktaOrganizationSchema
 
 logger = logging.getLogger(__name__)
 
@@ -22,15 +23,10 @@ def create_okta_organization(
     :param okta_update_tag: The timestamp value to set our new Neo4j resources with
     :return: Nothing
     """
-    ingest = """
-    MERGE (org:OktaOrganization{id: $ORG_NAME})
-    ON CREATE SET org.name = org.id, org.firstseen = timestamp()
-    SET org.lastupdated = $okta_update_tag
-    """
-
-    run_write_query(
+    # Data-model load
+    load(
         neo4j_session,
-        ingest,
-        ORG_NAME=organization,
-        okta_update_tag=okta_update_tag,
+        OktaOrganizationSchema(),
+        [{"id": organization, "name": organization}],
+        lastupdated=okta_update_tag,
     )

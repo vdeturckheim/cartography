@@ -8,9 +8,10 @@ from okta import FactorsClient
 from okta.framework.OktaError import OktaError
 from okta.models.factor.Factor import Factor
 
-from cartography.client.core.tx import run_write_query
+from cartography.client.core.tx import load
 from cartography.intel.okta.sync_state import OktaSyncState
 from cartography.util import timeit
+from cartography.models.okta.factor import OktaUserFactorSchema
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,7 @@ def _load_user_factors(
     neo4j_session: neo4j.Session,
     user_id: str,
     factors: List[Dict],
+    okta_org_id: str,
     okta_update_tag: int,
 ) -> None:
     """
@@ -113,30 +115,15 @@ def _load_user_factors(
     :return: Nothing
     """
 
-    ingest = """
-    MATCH (user:OktaUser{id: $USER_ID})
-    WITH user
-    UNWIND $FACTOR_LIST as factor_data
-    MERGE (new_factor:OktaUserFactor{id: factor_data.id})
-    ON CREATE SET new_factor.firstseen = timestamp()
-    SET new_factor.factor_type = factor_data.factor_type,
-    new_factor.provider = factor_data.provider,
-    new_factor.status = factor_data.status,
-    new_factor.created = factor_data.created,
-    new_factor.okta_last_updated = factor_data.okta_last_updated,
-    new_factor.lastupdated = $okta_update_tag
-    WITH user, new_factor
-    MERGE (user)-[r:FACTOR]->(new_factor)
-    ON CREATE SET r.firstseen = timestamp()
-    SET r.lastupdated = $okta_update_tag
-    """
-
-    run_write_query(
+    # Tag factor records with user id for relationship
+    for f in factors:
+        f["user_id"] = user_id
+    load(
         neo4j_session,
-        ingest,
-        USER_ID=user_id,
-        FACTOR_LIST=factors,
-        okta_update_tag=okta_update_tag,
+        OktaUserFactorSchema(),
+        factors,
+        lastupdated=okta_update_tag,
+        OKTA_ORG_ID=okta_org_id,
     )
 
 
@@ -166,4 +153,4 @@ def sync_users_factors(
         for user_id in sync_state.users:
             factor_data = _get_factor_for_user_id(factor_client, user_id)
             user_factors = transform_okta_user_factor_list(factor_data)
-            _load_user_factors(neo4j_session, user_id, user_factors, okta_update_tag)
+            _load_user_factors(neo4j_session, user_id, user_factors, okta_org_id, okta_update_tag)

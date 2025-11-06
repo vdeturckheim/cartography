@@ -7,9 +7,10 @@ from typing import List
 import neo4j
 from okta.framework.ApiClient import ApiClient
 
-from cartography.client.core.tx import run_write_query
+from cartography.client.core.tx import load
 from cartography.intel.okta.utils import create_api_client
 from cartography.util import timeit
+from cartography.models.okta.trustedorigin import OktaTrustedOriginSchema
 
 logger = logging.getLogger(__name__)
 
@@ -76,33 +77,12 @@ def _load_trusted_origins(
     :return: Nothing
     """
 
-    ingest = """
-    MATCH (org:OktaOrganization{id: $ORG_ID})
-    WITH org
-    UNWIND $TRUSTED_LIST as data
-    MERGE (new:OktaTrustedOrigin{id: data.id})
-    ON CREATE SET new.firstseen = timestamp()
-    SET new.name = data.name,
-    new.origin = data.origin,
-    new.scopes = data.scoped,
-    new.status = data.status,
-    new.created = data.created,
-    new.created_by = data.created_by,
-    new.okta_last_updated = data.okta_last_updated,
-    new.okta_last_updated_by = data.okta_last_updated_by,
-    new.lastupdated = $okta_update_tag
-    WITH org, new
-    MERGE (org)-[r:RESOURCE]->(new)
-    ON CREATE SET r.firstseen = timestamp()
-    SET r.lastupdated = $okta_update_tag
-    """
-
-    run_write_query(
+    load(
         neo4j_session,
-        ingest,
-        ORG_ID=okta_org_id,
-        TRUSTED_LIST=trusted_list,
-        okta_update_tag=okta_update_tag,
+        OktaTrustedOriginSchema(),
+        trusted_list,
+        lastupdated=okta_update_tag,
+        OKTA_ORG_ID=okta_org_id,
     )
 
 
