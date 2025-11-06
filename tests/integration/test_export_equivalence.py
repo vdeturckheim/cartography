@@ -3,7 +3,6 @@ import json
 import os
 import tempfile
 
-import neo4j
 
 from cartography.client.core.tx import load
 from cartography.sinks import file_export as file_export_sink
@@ -75,7 +74,7 @@ def _with_export(fn):
 
 
 @_with_export
-def test_lastpass_user_export_equivalence(out_path: str, neo4j_session: neo4j.Session):
+def test_lastpass_user_export_equivalence(out_path: str, neo4j_session):
     update_tag = 1700000100
     tenant_id = "lp-tenant-1"
     user_id = "lp-user-1"
@@ -117,7 +116,7 @@ def test_lastpass_user_export_equivalence(out_path: str, neo4j_session: neo4j.Se
 
 
 @_with_export
-def test_snipeit_asset_export_equivalence(out_path: str, neo4j_session: neo4j.Session):
+def test_snipeit_asset_export_equivalence(out_path: str, neo4j_session):
     update_tag = 1700000200
     tenant_id = "snipe-tenant-1"
     user_email = "owner@example.com"
@@ -170,7 +169,7 @@ def test_snipeit_asset_export_equivalence(out_path: str, neo4j_session: neo4j.Se
 
 
 @_with_export
-def test_tailscale_device_export_equivalence(out_path: str, neo4j_session: neo4j.Session):
+def test_tailscale_device_export_equivalence(out_path: str, neo4j_session):
     update_tag = 1700000300
     tailnet = "tn-1"
     user_login = "user@tailscale.test"
@@ -215,7 +214,7 @@ def test_tailscale_device_export_equivalence(out_path: str, neo4j_session: neo4j
 
 
 @_with_export
-def test_openai_project_export_equivalence(out_path: str, neo4j_session: neo4j.Session):
+def test_openai_project_export_equivalence(out_path: str, neo4j_session):
     update_tag = 1700000400
     org = "org-1"
     user = "ou-1"
@@ -264,7 +263,7 @@ def test_openai_project_export_equivalence(out_path: str, neo4j_session: neo4j.S
 
 
 @_with_export
-def test_sentinelone_agent_export_equivalence(out_path: str, neo4j_session: neo4j.Session):
+def test_sentinelone_agent_export_equivalence(out_path: str, neo4j_session):
     update_tag = 1700000500
     account_id = "s1-acc-1"
     agent_id = "s1-agent-1"
@@ -295,7 +294,7 @@ def test_sentinelone_agent_export_equivalence(out_path: str, neo4j_session: neo4
 
 
 @_with_export
-def test_scaleway_flexibleip_export_equivalence(out_path: str, neo4j_session: neo4j.Session):
+def test_scaleway_flexibleip_export_equivalence(out_path: str, neo4j_session):
     update_tag = 1700000600
     org_id = "scw-org-1"
     project_id = "scw-proj-1"
