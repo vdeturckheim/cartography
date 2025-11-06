@@ -10,11 +10,17 @@ import neo4j
 from okta.framework.ApiClient import ApiClient
 from okta.framework.OktaError import OktaError
 
-from cartography.client.core.tx import run_write_query
+from cartography.client.core.tx import load, load_matchlinks
 from cartography.intel.okta.utils import check_rate_limit
 from cartography.intel.okta.utils import create_api_client
 from cartography.intel.okta.utils import is_last_page
 from cartography.util import timeit
+from cartography.models.okta.application import OktaApplicationSchema, ReplyUriSchema
+from cartography.models.okta.common import (
+    OktaUserApplicationMatchLink,
+    OktaGroupApplicationMatchLink,
+    OktaApplicationToReplyUriMatchLink,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -273,33 +279,12 @@ def _load_okta_applications(
     :param okta_update_tag: The timestamp value to set our new Neo4j resources with
     :return: Nothing
     """
-    ingest_statement = """
-    MATCH (org:OktaOrganization{id: $ORG_ID})
-    WITH org
-    UNWIND $APP_LIST as app_data
-    MERGE (new_app:OktaApplication{id: app_data.id})
-    ON CREATE SET new_app.firstseen = timestamp()
-    SET new_app.name = app_data.name,
-    new_app.label = app_data.label,
-    new_app.created = app_data.created,
-    new_app.okta_last_updated = app_data.okta_last_updated,
-    new_app.status = app_data.status,
-    new_app.activated = app_data.activated,
-    new_app.features = app_data.features,
-    new_app.sign_on_mode = app_data.sign_on_mode,
-    new_app.lastupdated = $okta_update_tag
-    WITH org, new_app
-    MERGE (org)-[org_r:RESOURCE]->(new_app)
-    ON CREATE SET org_r.firstseen = timestamp()
-    SET org_r.lastupdated = $okta_update_tag
-    """
-
-    run_write_query(
+    load(
         neo4j_session,
-        ingest_statement,
-        ORG_ID=okta_org_id,
-        APP_LIST=app_list,
-        okta_update_tag=okta_update_tag,
+        OktaApplicationSchema(),
+        app_list,
+        lastupdated=okta_update_tag,
+        OKTA_ORG_ID=okta_org_id,
     )
 
 
@@ -308,6 +293,7 @@ def _load_application_user(
     neo4j_session: neo4j.Session,
     app_id: str,
     user_list: List[str],
+    okta_org_id: str,
     okta_update_tag: int,
 ) -> None:
     """
@@ -318,24 +304,16 @@ def _load_application_user(
     :param okta_update_tag: The timestamp value to set our new Neo4j resources with
     :return: Nothing
     """
-    ingest = """
-    MATCH (app:OktaApplication{id: $APP_ID})
-    WITH app
-    UNWIND $USER_LIST as user_id
-    MATCH (user:OktaUser{id: user_id})
-    WITH app, user
-    MERGE (user)-[r:APPLICATION]->(app)
-    ON CREATE SET r.firstseen = timestamp()
-    SET r.lastupdated = $okta_update_tag
-    """
-
-    run_write_query(
-        neo4j_session,
-        ingest,
-        APP_ID=app_id,
-        USER_LIST=user_list,
-        okta_update_tag=okta_update_tag,
-    )
+    rows = [{"app_id": app_id, "user_id": uid} for uid in user_list]
+    if rows:
+        load_matchlinks(
+            neo4j_session,
+            OktaUserApplicationMatchLink(),
+            rows,
+            lastupdated=okta_update_tag,
+            _sub_resource_label="OktaOrganization",
+            _sub_resource_id=okta_org_id,
+        )
 
 
 @timeit
@@ -343,6 +321,7 @@ def _load_application_group(
     neo4j_session: neo4j.Session,
     app_id: str,
     group_list: List[str],
+    okta_org_id: str,
     okta_update_tag: int,
 ) -> None:
     """
@@ -353,24 +332,16 @@ def _load_application_group(
     :param okta_update_tag: The timestamp value to set our new Neo4j resources with
     :return: Nothing
     """
-    ingest = """
-    MATCH (app:OktaApplication{id: $APP_ID})
-    WITH app
-    UNWIND $GROUP_LIST as group_id
-    MATCH (group:OktaGroup{id: group_id})
-    WITH app, group
-    MERGE (group)-[r:APPLICATION]->(app)
-    ON CREATE SET r.firstseen = timestamp()
-    SET r.lastupdated = $okta_update_tag
-    """
-
-    run_write_query(
-        neo4j_session,
-        ingest,
-        APP_ID=app_id,
-        GROUP_LIST=group_list,
-        okta_update_tag=okta_update_tag,
-    )
+    rows = [{"app_id": app_id, "group_id": gid} for gid in group_list]
+    if rows:
+        load_matchlinks(
+            neo4j_session,
+            OktaGroupApplicationMatchLink(),
+            rows,
+            lastupdated=okta_update_tag,
+            _sub_resource_label="OktaOrganization",
+            _sub_resource_id=okta_org_id,
+        )
 
 
 @timeit
@@ -378,6 +349,7 @@ def _load_application_reply_urls(
     neo4j_session: neo4j.Session,
     app_id: str,
     reply_urls: List[str],
+    okta_org_id: str,
     okta_update_tag: int,
 ) -> None:
     """
@@ -390,26 +362,21 @@ def _load_application_reply_urls(
     """
     if not reply_urls:
         return
-    ingest = """
-    MATCH (app:OktaApplication{id: $APP_ID})
-    WITH app
-    UNWIND $URL_LIST as url_list
-    MERGE (uri:ReplyUri{id: url_list})
-    ON CREATE SET uri.firstseen = timestamp()
-    SET uri.uri = url_list,
-    uri.lastupdated = $okta_update_tag
-    WITH app, uri
-    MERGE (uri)<-[r:REPLYURI]-(app)
-    ON CREATE SET r.firstseen = timestamp()
-    SET r.lastupdated = $okta_update_tag
-    """
-
-    run_write_query(
+    # Load ReplyUri nodes first
+    load(
         neo4j_session,
-        ingest,
-        APP_ID=app_id,
-        URL_LIST=reply_urls,
-        okta_update_tag=okta_update_tag,
+        ReplyUriSchema(),
+        [{"id": url, "uri": url} for url in reply_urls],
+        lastupdated=okta_update_tag,
+    )
+    rows = [{"app_id": app_id, "uri": url} for url in reply_urls]
+    load_matchlinks(
+        neo4j_session,
+        OktaApplicationToReplyUriMatchLink(),
+        rows,
+        lastupdated=okta_update_tag,
+        _sub_resource_label="OktaOrganization",
+        _sub_resource_id=okta_org_id,
     )
 
 
@@ -440,11 +407,11 @@ def sync_okta_applications(
         app_id = app["id"]
         user_list_data = _get_application_assigned_users(api_client, app_id)
         user_list = transform_application_assigned_users_list(user_list_data)
-        _load_application_user(neo4j_session, app_id, user_list, okta_update_tag)
+        _load_application_user(neo4j_session, app_id, user_list, okta_org_id, okta_update_tag)
 
         group_list_data = _get_application_assigned_groups(api_client, app_id)
         group_list = transform_application_assigned_groups_list(group_list_data)
-        _load_application_group(neo4j_session, app_id, group_list, okta_update_tag)
+        _load_application_group(neo4j_session, app_id, group_list, okta_org_id, okta_update_tag)
 
         reply_urls = transform_okta_application_extract_replyurls(app)
-        _load_application_reply_urls(neo4j_session, app_id, reply_urls, okta_update_tag)
+        _load_application_reply_urls(neo4j_session, app_id, reply_urls, okta_org_id, okta_update_tag)

@@ -10,7 +10,7 @@ import neo4j
 
 from cartography.client.core.tx import read_list_of_dicts_tx
 from cartography.client.core.tx import read_single_value_tx
-from cartography.client.core.tx import run_write_query
+from cartography.client.core.tx import load_matchlinks
 from cartography.util import timeit
 
 AccountRole = namedtuple("AccountRole", ["account_id", "role_name"])
@@ -99,6 +99,7 @@ def query_for_okta_to_aws_role_mapping(
 def _load_okta_group_to_aws_roles(
     neo4j_session: neo4j.Session,
     group_to_role: List[Dict],
+    okta_org_id: str,
     okta_update_tag: int,
 ) -> None:
     """
@@ -108,22 +109,17 @@ def _load_okta_group_to_aws_roles(
     :param okta_update_tag: The timestamp value to set our new Neo4j resources with
     :return: Nothing
     """
-    ingest_statement = """
-
-    UNWIND $GROUP_TO_ROLE as app_data
-    MATCH (role:AWSRole{arn: app_data.role})
-    MATCH (group:OktaGroup{id: app_data.groupid})
-    MERGE (role)<-[r:ALLOWED_BY]-(group)
-    ON CREATE SET r.firstseen = timestamp()
-    SET r.lastupdated = $okta_update_tag
-    """
-
-    run_write_query(
-        neo4j_session,
-        ingest_statement,
-        GROUP_TO_ROLE=group_to_role,
-        okta_update_tag=okta_update_tag,
-    )
+    rows = [{"group_id": m["groupid"], "role_arn": m["role"]} for m in group_to_role]
+    if rows:
+        from cartography.models.okta.common import OktaGroupAllowedByAWSRoleMatchLink
+        load_matchlinks(
+            neo4j_session,
+            OktaGroupAllowedByAWSRoleMatchLink(),
+            rows,
+            lastupdated=okta_update_tag,
+            _sub_resource_label="OktaOrganization",
+            _sub_resource_id=okta_org_id,
+        )
 
 
 @timeit
@@ -143,11 +139,7 @@ def _load_human_can_assume_role(
     SET r.lastupdated = $okta_update_tag
     """
 
-    run_write_query(
-        neo4j_session,
-        ingest_statement,
-        okta_update_tag=okta_update_tag,
-    )
+    neo4j_session.write_transaction(lambda tx: tx.run(ingest_statement, okta_update_tag=okta_update_tag).consume())
 
 
 def get_awssso_okta_groups(
@@ -254,9 +246,20 @@ def _load_awssso_tx(
 def _load_okta_group_to_awssso_roles(
     neo4j_session: neo4j.Session,
     group_to_role: list[GroupRole],
+    okta_org_id: str,
     okta_update_tag: int,
 ) -> None:
-    neo4j_session.write_transaction(_load_awssso_tx, group_to_role, okta_update_tag)
+    rows = [{"group_id": g.okta_group_id, "role_arn": g.aws_role_arn} for g in group_to_role]
+    if rows:
+        from cartography.models.okta.common import OktaGroupAllowedByAWSRoleMatchLink
+        load_matchlinks(
+            neo4j_session,
+            OktaGroupAllowedByAWSRoleMatchLink(),
+            rows,
+            lastupdated=okta_update_tag,
+            _sub_resource_label="OktaOrganization",
+            _sub_resource_id=okta_org_id,
+        )
 
 
 @timeit
@@ -285,7 +288,7 @@ def sync_okta_aws_saml(
         neo4j_session,
         mapping_regex,
     )
-    _load_okta_group_to_aws_roles(neo4j_session, group_to_role_mapping, okta_update_tag)
+    _load_okta_group_to_aws_roles(neo4j_session, group_to_role_mapping, okta_org_id, okta_update_tag)
     _load_human_can_assume_role(neo4j_session, okta_update_tag)
 
     sso_okta_groups = get_awssso_okta_groups(neo4j_session, okta_org_id)
@@ -297,5 +300,6 @@ def sync_okta_aws_saml(
     _load_okta_group_to_awssso_roles(
         neo4j_session,
         group_to_ssorole_mapping,
+        okta_org_id,
         okta_update_tag,
     )

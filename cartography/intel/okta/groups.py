@@ -11,12 +11,14 @@ from okta.framework.OktaError import OktaError
 from okta.framework.PagedResults import PagedResults
 from okta.models.usergroup import UserGroup
 
-from cartography.client.core.tx import run_write_query
+from cartography.client.core.tx import load, load_matchlinks
 from cartography.intel.okta.sync_state import OktaSyncState
 from cartography.intel.okta.utils import check_rate_limit
 from cartography.intel.okta.utils import create_api_client
 from cartography.intel.okta.utils import is_last_page
 from cartography.util import timeit
+from cartography.models.okta.group import OktaGroupSchema
+from cartography.models.okta.common import OktaUserMemberOfGroupMatchLink
 
 logger = logging.getLogger(__name__)
 
@@ -186,31 +188,12 @@ def _load_okta_groups(
     :param okta_update_tag: The timestamp value to set our new Neo4j resources with
     :return: Nothing
     """
-    ingest_statement = """
-    MATCH (org:OktaOrganization{id: $ORG_ID})
-    WITH org
-    UNWIND $GROUP_LIST as group_data
-    MERGE (new_group:OktaGroup{id: group_data.id})
-    ON CREATE SET new_group.firstseen = timestamp()
-    SET new_group.name = group_data.name,
-    new_group.description = group_data.description,
-    new_group.sam_account_name = group_data.sam_account_name,
-    new_group.dn = group_data.dn,
-    new_group.windows_domain_qualified_name = group_data.windows_domain_qualified_name,
-    new_group.external_id = group_data.external_id,
-    new_group.lastupdated = $okta_update_tag
-    WITH new_group, org
-    MERGE (org)-[org_r:RESOURCE]->(new_group)
-    ON CREATE SET org_r.firstseen = timestamp()
-    SET org_r.lastupdated = $okta_update_tag
-    """
-
-    run_write_query(
+    load(
         neo4j_session,
-        ingest_statement,
-        ORG_ID=okta_org_id,
-        GROUP_LIST=group_list,
-        okta_update_tag=okta_update_tag,
+        OktaGroupSchema(),
+        group_list,
+        lastupdated=okta_update_tag,
+        OKTA_ORG_ID=okta_org_id,
     )
 
 
@@ -219,6 +202,7 @@ def load_okta_group_members(
     neo4j_session: neo4j.Session,
     group_id: str,
     member_list: List[Dict],
+    okta_org_id: str,
     okta_update_tag: int,
 ) -> None:
     """
@@ -229,37 +213,17 @@ def load_okta_group_members(
     :param okta_update_tag: The timestamp value to set our new Neo4j resources with
     :return: Nothing
     """
-    ingest = """
-    MATCH (group:OktaGroup{id: $GROUP_ID})
-    WITH group
-    UNWIND $MEMBER_LIST as member
-        MERGE (user:OktaUser{id: member.id})
-        ON CREATE SET user.firstseen = timestamp(),
-            user.first_name = member.first_name,
-            user.last_name = member.last_name,
-            user.login = member.login,
-            user.email = member.email,
-            user.second_email = member.second_email,
-            user.created = member.created,
-            user.activated = member.activated,
-            user.status_changed = member.status_changed,
-            user.last_login = member.last_login,
-            user.okta_last_updated = member.okta_last_updated,
-            user.password_changed = member.password_changed,
-            user.transition_to_status = member.transition_to_status,
-            user.lastupdated = $okta_update_tag
-        MERGE (user)-[r:MEMBER_OF_OKTA_GROUP]->(group)
-        ON CREATE SET r.firstseen = timestamp()
-        SET r.lastupdated = $okta_update_tag
-    """
     logging.info(f"Loading {len(member_list)} members of group {group_id}")
-    run_write_query(
-        neo4j_session,
-        ingest,
-        GROUP_ID=group_id,
-        MEMBER_LIST=member_list,
-        okta_update_tag=okta_update_tag,
-    )
+    rows = [{"group_id": group_id, "user_id": m["id"]} for m in member_list]
+    if rows:
+        load_matchlinks(
+            neo4j_session,
+            OktaUserMemberOfGroupMatchLink(),
+            rows,
+            lastupdated=okta_update_tag,
+            _sub_resource_label="OktaOrganization",
+            _sub_resource_id=okta_org_id,
+        )
 
 
 @timeit
@@ -267,6 +231,7 @@ def sync_okta_group_membership(
     neo4j_session: neo4j.Session,
     api_client: ApiClient,
     group_list_info: List[Dict],
+    okta_org_id: str,
     okta_update_tag: int,
 ) -> None:
     """
@@ -288,6 +253,7 @@ def sync_okta_group_membership(
             neo4j_session,
             group_id,
             transformed_member_data,
+            okta_org_id,
             okta_update_tag,
         )
 
@@ -324,5 +290,6 @@ def sync_okta_groups(
         neo4_session,
         api_client,
         group_list_info,
+        okta_org_id,
         okta_update_tag,
     )
