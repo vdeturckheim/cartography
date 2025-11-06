@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 
+import pytest
 
 from cartography.client.core.tx import load
 from cartography.sinks import file_export as file_export_sink
@@ -10,24 +11,22 @@ from cartography.sinks import file_export as file_export_sink
 # Models used for the tests
 from cartography.models.lastpass.tenant import LastpassTenantSchema
 from cartography.models.lastpass.user import LastpassUserSchema
-
-from cartography.models.snipeit.tenant import SnipeitTenantSchema
-from cartography.models.snipeit.user import SnipeitUserSchema
-from cartography.models.snipeit.asset import SnipeitAssetSchema
-
-from cartography.models.tailscale.tailnet import TailscaleTailnetSchema
-from cartography.models.tailscale.user import TailscaleUserSchema
-from cartography.models.tailscale.device import TailscaleDeviceSchema
-
 from cartography.models.openai.organization import OpenAIOrganizationSchema
-from cartography.models.openai.user import OpenAIUserSchema
 from cartography.models.openai.project import OpenAIProjectSchema
-from cartography.models.sentinelone.account import S1AccountSchema
-from cartography.models.sentinelone.agent import S1AgentSchema
+from cartography.models.openai.user import OpenAIUserSchema
+from cartography.models.scaleway.instance.flexibleip import (
+    ScalewayFlexibleIpSchema,
+)
 from cartography.models.scaleway.organization import ScalewayOrganizationSchema
 from cartography.models.scaleway.project import ScalewayProjectSchema
-from cartography.models.scaleway.instance.flexibleip import ScalewayFlexibleIpSchema
-import pytest
+from cartography.models.sentinelone.account import S1AccountSchema
+from cartography.models.sentinelone.agent import S1AgentSchema
+from cartography.models.snipeit.asset import SnipeitAssetSchema
+from cartography.models.snipeit.tenant import SnipeitTenantSchema
+from cartography.models.snipeit.user import SnipeitUserSchema
+from cartography.models.tailscale.device import TailscaleDeviceSchema
+from cartography.models.tailscale.tailnet import TailscaleTailnetSchema
+from cartography.models.tailscale.user import TailscaleUserSchema
 
 
 def _read_ndjson_gz(path: str):
